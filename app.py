@@ -1,125 +1,99 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import streamlit as st
+import pandas as pd
 import joblib
-import numpy as np
-import matplotlib.pyplot as plt
-import io
-import base64
 
-print("🚀 Starting Flask App...")
+# Load files
+model = joblib.load("thyroid_model.pkl")
+encoders = joblib.load("encoders.pkl")
+columns = joblib.load("columns.pkl")
 
-app = Flask(__name__)
-CORS(app)
+st.title("🧠 Thyroid Recurrence Prediction App")
 
-# Load model
-try:
-    model = joblib.load("model.pkl")
-    print("✅ Model loaded successfully")
-except Exception as e:
-    print("❌ Error loading model:", e)
-    model = None
+# ================= INPUT UI =================
+def user_input():
+    age = st.number_input("Age", 10, 100)
 
-try:
-    columns = joblib.load("columns.pkl")
-    print("✅ Columns loaded successfully")
-except Exception as e:
-    print("❌ Error loading columns:", e)
-    columns = None
+    gender = st.selectbox("Gender", ["Male", "Female"])
+    smoking = st.selectbox("Smoking", ["Yes", "No"])
+    adenopathy = st.selectbox("Adenopathy", ["Yes", "No"])
+    focality = st.selectbox("Focality", ["Uni-Focal", "Multi-Focal"])
+    stage = st.selectbox("Stage", ["I", "II", "III", "IV"])
 
-
-# Preprocess
-def preprocess(data):
-    input_dict = {col: 0 for col in columns}
-
-    input_dict["Age"] = data.get("age", 0)
-
-    if data.get("gender") == "Male":
-        input_dict["Gender_M"] = 1
-
-    if data.get("smoking") == "Yes":
-        input_dict["Smoking_Yes"] = 1
-
-    if data.get("adenopathy") == "Yes":
-        input_dict["Adenopathy_Right"] = 1
-
-    if data.get("focality") == "Uni-Focal":
-        input_dict["Focality_Uni-Focal"] = 1
-
-    stage_map = {
-        "II": "Stage_II",
-        "III": "Stage_III",
-        "IVA": "Stage_IVA",
-        "IVB": "Stage_IVB"
+    data = {
+        "Age": age,
+        "Gender": gender,
+        "Smoking": smoking,
+        "Adenopathy": adenopathy,
+        "Focality": focality,
+        "Stage": stage,
     }
 
-    if data.get("stage") in stage_map:
-        input_dict[stage_map[data["stage"]]] = 1
-
-    return np.array(list(input_dict.values()))
+    return pd.DataFrame([data])
 
 
-# Prediction API
-@app.route("/predict", methods=["POST"])
-def predict():
-    if model is None or columns is None:
-        return jsonify({"error": "Model not loaded"}), 500
+input_df = user_input()
 
-    try:
-        data = request.json
-        input_data = preprocess(data)
+# ================= ENCODING =================
+def encode_input(df):
+    df_copy = df.copy()
 
-        # Prediction
-        prob = model.predict_proba([input_data])[0][1]
-        prediction = "HIGH RISK" if prob > 0.5 else "LOW RISK"
+    for col in df_copy.columns:
+        if col in encoders:
+            le = encoders[col]
+            df_copy[col] = le.transform(df_copy[col])
 
-        # 🔥 GRAPH GENERATION
-        ages = list(range(20, 80, 5))
-        risks = []
-
-        # Ensure Age column exists
-        if "Age" not in columns:
-            return jsonify({"error": "Age column missing"}), 500
-
-        age_index = columns.index("Age")
-
-        for age in ages:
-            temp = input_data.copy()
-            temp[age_index] = age
-            risk = model.predict_proba([temp])[0][1]
-            risks.append(risk)
-
-        plt.figure()
-        plt.plot(ages, risks, marker='o')
-        plt.xlabel("Age")
-        plt.ylabel("Risk Probability")
-        plt.title("Age vs Recurrence Risk")
-
-        img = io.BytesIO()
-        plt.savefig(img, format='png', bbox_inches='tight')
-        img.seek(0)
-
-        graph = base64.b64encode(img.getvalue()).decode()
-
-        plt.close()  # 🔥 IMPORTANT FIX
-
-        return jsonify({
-            "prediction": prediction,
-            "probability": float(prob),
-            "graph": graph
-        })
-
-    except Exception as e:
-        print("❌ Prediction error:", e)
-        return jsonify({"error": str(e)}), 500
+    return df_copy
 
 
-# Home route
-@app.route("/")
-def home():
-    return "✅ Flask Backend is Running!"
+encoded_input = encode_input(input_df)
 
+# Ensure same column order
+encoded_input = encoded_input.reindex(columns=columns, fill_value=0)
 
-# Run server
-if __name__ == "__main__":
-    print("🔥 Running Flask server...")
-    app.run(debug=True)
+# ================= PREDICTION =================
+if st.button("Predict"):
+
+    prediction = model.predict(encoded_input)[0]
+    prob = model.predict_proba(encoded_input)[0][1]
+
+    # Output
+    st.subheader("🔍 Prediction Result")
+
+    if prediction == 1:
+        st.error("⚠️ Recurrence: YES")
+    else:
+        st.success("✅ Recurrence: NO")
+
+    st.write(f"👉 Recurrence Risk = {round(prob * 100, 2)}%")
+
+    # ================= FEATURE IMPORTANCE =================
+    st.subheader("📊 Feature Importance")
+
+    importances = model.feature_importances_
+    feat_imp = pd.DataFrame({
+        "Feature": columns,
+        "Importance": importances
+    }).sort_values(by="Importance", ascending=False)
+
+    st.bar_chart(feat_imp.set_index("Feature"))
+
+    top_features = feat_imp.head(2)["Feature"].values
+    st.write(f"👉 {top_features[0]} and {top_features[1]} influenced prediction most")
+
+    # ================= COUNTERFACTUAL =================
+    st.subheader("💡 Counterfactual Suggestion")
+
+    suggestion = ""
+
+    if "Stage" in input_df.columns:
+        if input_df["Stage"][0] in ["III", "IV"]:
+            suggestion += "If stage was lower, recurrence risk may decrease. "
+
+    if "Adenopathy" in input_df.columns:
+        if input_df["Adenopathy"][0] == "Yes":
+            suggestion += "Absence of adenopathy reduces recurrence risk. "
+
+    if suggestion == "":
+        suggestion = "Patient already in relatively low-risk category."
+
+    st.info(f"👉 {suggestion}")
