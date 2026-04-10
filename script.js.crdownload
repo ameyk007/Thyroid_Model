@@ -1,0 +1,29 @@
+function predict() {
+    const data = {
+        age: parseInt(age.value),
+        gender: gender.value,
+        smoking: smoking.value,
+        adenopathy: adenopathy.value,
+        focality: focality.value,
+        stage: stage.value
+    };
+
+    fetch("http://127.0.0.1:5000/predict", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+    })
+    .then(res => res.json())
+    .then(data => {
+        result.innerText =
+            data.prediction + " | Risk: " + (data.probability * 100).toFixed(2) + "%";
+
+        // 🔥 GRAPH FIX
+        if (data.graph) {
+            graph.src = "data:image/png;base64," + data.graph;
+        } else {
+            console.log("Graph not received");
+        }
+    })
+    .catch(err => console.error(err));
+}

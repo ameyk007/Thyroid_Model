@@ -1,0 +1,125 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import joblib
+import numpy as np
+import matplotlib.pyplot as plt
+import io
+import base64
+
+print("🚀 Starting Flask App...")
+
+app = Flask(__name__)
+CORS(app)
+
+# Load model
+try:
+    model = joblib.load("model.pkl")
+    print("✅ Model loaded successfully")
+except Exception as e:
+    print("❌ Error loading model:", e)
+    model = None
+
+try:
+    columns = joblib.load("columns.pkl")
+    print("✅ Columns loaded successfully")
+except Exception as e:
+    print("❌ Error loading columns:", e)
+    columns = None
+
+
+# Preprocess
+def preprocess(data):
+    input_dict = {col: 0 for col in columns}
+
+    input_dict["Age"] = data.get("age", 0)
+
+    if data.get("gender") == "Male":
+        input_dict["Gender_M"] = 1
+
+    if data.get("smoking") == "Yes":
+        input_dict["Smoking_Yes"] = 1
+
+    if data.get("adenopathy") == "Yes":
+        input_dict["Adenopathy_Right"] = 1
+
+    if data.get("focality") == "Uni-Focal":
+        input_dict["Focality_Uni-Focal"] = 1
+
+    stage_map = {
+        "II": "Stage_II",
+        "III": "Stage_III",
+        "IVA": "Stage_IVA",
+        "IVB": "Stage_IVB"
+    }
+
+    if data.get("stage") in stage_map:
+        input_dict[stage_map[data["stage"]]] = 1
+
+    return np.array(list(input_dict.values()))
+
+
+# Prediction API
+@app.route("/predict", methods=["POST"])
+def predict():
+    if model is None or columns is None:
+        return jsonify({"error": "Model not loaded"}), 500
+
+    try:
+        data = request.json
+        input_data = preprocess(data)
+
+        # Prediction
+        prob = model.predict_proba([input_data])[0][1]
+        prediction = "HIGH RISK" if prob > 0.5 else "LOW RISK"
+
+        # 🔥 GRAPH GENERATION
+        ages = list(range(20, 80, 5))
+        risks = []
+
+        # Ensure Age column exists
+        if "Age" not in columns:
+            return jsonify({"error": "Age column missing"}), 500
+
+        age_index = columns.index("Age")
+
+        for age in ages:
+            temp = input_data.copy()
+            temp[age_index] = age
+            risk = model.predict_proba([temp])[0][1]
+            risks.append(risk)
+
+        plt.figure()
+        plt.plot(ages, risks, marker='o')
+        plt.xlabel("Age")
+        plt.ylabel("Risk Probability")
+        plt.title("Age vs Recurrence Risk")
+
+        img = io.BytesIO()
+        plt.savefig(img, format='png', bbox_inches='tight')
+        img.seek(0)
+
+        graph = base64.b64encode(img.getvalue()).decode()
+
+        plt.close()  # 🔥 IMPORTANT FIX
+
+        return jsonify({
+            "prediction": prediction,
+            "probability": float(prob),
+            "graph": graph
+        })
+
+    except Exception as e:
+        print("❌ Prediction error:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# Home route
+@app.route("/")
+def home():
+    return "✅ Flask Backend is Running!"
+
+
+# Run server
+if __name__ == "__main__":
+    print("🔥 Running Flask server...")
+    app.run(debug=True)
